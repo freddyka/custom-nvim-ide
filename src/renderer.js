@@ -1,0 +1,345 @@
+const THEME = {
+  background: "#181825", foreground: "#cdd6f4", cursor: "#cdd6f4", selectionBackground: "#45475a",
+  black: "#45475a", red: "#f38ba8", green: "#a6e3a1", yellow: "#f9e2af", blue: "#89b4fa",
+  magenta: "#cba6f7", cyan: "#94e2d5", white: "#bac2de", brightBlack: "#585b70", brightRed: "#f38ba8",
+  brightGreen: "#a6e3a1", brightYellow: "#f9e2af", brightBlue: "#89b4fa", brightMagenta: "#cba6f7",
+  brightCyan: "#94e2d5", brightWhite: "#a6adc8",
+};
+const FONT = '"JetBrainsMono NFM", "JetBrains Mono", Consolas, monospace';
+
+// id -> elementId der Terminal-Zelle (und tmux-Sessionname)
+const TERM_EL = { edit: "term-edit", shell: "term-shell", ai: "term-ai", shell2: "term-shell2" };
+// Zellen-Position -> Channel (fuer Fokus per Tastatur)
+const CELL_OF = { 1: "edit", 2: "shell", 3: "tr", 4: "ai" };
+
+const cells = {}; // id -> { t, fit, inputDisp, opened }
+let brOn = true;
+
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (_) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, String(v)); } catch (_) {} },
+};
+
+function ensureCell(id) {
+  if (cells[id]) return cells[id];
+  const t = new Terminal({
+    fontFamily: FONT, fontSize: 13, cursorBlink: true, allowProposedApi: true, scrollback: 5000, theme: THEME,
+  });
+  const fit = new FitAddon.FitAddon();
+  t.loadAddon(fit);
+  t.open(document.getElementById(TERM_EL[id]));
+
+  t.attachCustomKeyEventHandler((e) => {
+    if (e.type !== "keydown") return true;
+    if (e.ctrlKey && e.shiftKey && (e.key === "C" || e.key === "c")) {
+      const sel = t.getSelection();
+      if (sel) window.devbox.clipboardWrite(sel);
+      return false;
+    }
+    if (e.ctrlKey && e.shiftKey && (e.key === "V" || e.key === "v")) {
+      window.devbox.clipboardRead().then((txt) => { if (txt) window.devbox.input(id, txt); });
+      return false;
+    }
+    return true;
+  });
+
+  document.getElementById(TERM_EL[id]).addEventListener("mousedown", (e) => {
+    if (e.button === 1) { // Mittelklick = einfuegen
+      e.preventDefault();
+      window.devbox.clipboardRead().then((txt) => { if (txt) window.devbox.input(id, txt); });
+    }
+  });
+
+  const c = { t, fit, inputDisp: null, opened: false };
+  c.inputDisp = t.onData((d) => window.devbox.input(id, d));
+  cells[id] = c;
+  return c;
+}
+
+function fitCell(id) {
+  const c = cells[id];
+  if (!c) return;
+  try { c.fit.fit(); } catch (_) {}
+  if (c.opened && c.t.cols && c.t.rows && (c._cols !== c.t.cols || c._rows !== c.t.rows)) {
+    c._cols = c.t.cols;
+    c._rows = c.t.rows;
+    window.devbox.resize(id, c.t.cols, c.t.rows);
+  }
+}
+
+function openCell(id) {
+  const c = ensureCell(id);
+  try { c.fit.fit(); } catch (_) {}
+  if (!c.opened) {
+    c.opened = true;
+    window.devbox.openChannel(id, c.t.cols || 80, c.t.rows || 24);
+  }
+}
+
+// --- Layout merken / wiederherstellen ---
+function saveLayout() {
+  LS.set("db_colL", Math.round(document.getElementById("colL").getBoundingClientRect().width));
+  LS.set("db_topL", Math.round(document.getElementById("cell-edit").getBoundingClientRect().height));
+  LS.set("db_topR", Math.round(document.getElementById("cell-tr").getBoundingClientRect().height));
+  LS.set("db_browser", brOn ? "1" : "0");
+}
+function restoreLayout() {
+  const colL = LS.get("db_colL", null);
+  if (colL) document.getElementById("colL").style.flex = "0 0 " + colL + "px";
+  const tl = LS.get("db_topL", null);
+  if (tl) document.getElementById("cell-edit").style.flex = "0 0 " + tl + "px";
+  const tr = LS.get("db_topR", null);
+  if (tr) document.getElementById("cell-tr").style.flex = "0 0 " + tr + "px";
+}
+
+// --- Aktive Zelle ---
+function setActiveEl(cellEl) {
+  document.querySelectorAll(".cell").forEach((c) => c.classList.remove("active"));
+  if (cellEl) cellEl.classList.add("active");
+}
+document.querySelectorAll(".cell").forEach((cell) => {
+  cell.addEventListener("focusin", () => setActiveEl(cell));
+  cell.addEventListener("mousedown", () => setActiveEl(cell));
+});
+
+function focusCell(pos) {
+  const id = CELL_OF[pos];
+  if (id === "tr") {
+    setActiveEl(document.getElementById("cell-tr"));
+    if (brOn) document.getElementById("url").focus();
+    else { ensureCell("shell2"); cells.shell2.t.focus(); }
+  } else {
+    setActiveEl(document.getElementById("cell-" + id));
+    if (cells[id]) cells[id].t.focus();
+  }
+}
+
+// --- SSH / Kanaele ---
+const statusEl = document.getElementById("status");
+window.devbox.onAppStatus((s) => { statusEl.textContent = s || ""; });
+window.devbox.onData((p) => { const c = cells[p.id]; if (c) c.t.write(p.data); });
+
+window.devbox.onChannelStatus((p) => {
+  const c = cells[p.id];
+  if (p.status === "closed" && c) {
+    c.opened = false;
+    if (c.inputDisp) c.inputDisp.dispose();
+    c.t.write("\r\n\x1b[90m[Sitzung beendet — Enter zum Neustart]\x1b[0m\r\n");
+    const one = c.t.onData((d) => {
+      if (d === "\r" || d === "\n") {
+        one.dispose();
+        c.t.reset();
+        c.inputDisp = c.t.onData((x) => window.devbox.input(p.id, x));
+        openCell(p.id);
+      }
+    });
+  }
+});
+
+window.devbox.onReady(() => {
+  openCell("edit");
+  openCell("shell");
+  openCell("ai");
+  if (!brOn) openCell("shell2");
+  setActiveEl(document.getElementById("cell-edit"));
+  cells.edit.t.focus();
+});
+
+// --- Browser-Zelle ---
+const trBrowser = document.getElementById("tr-browser");
+const trTerm = document.getElementById("tr-term");
+const toggleBtn = document.getElementById("toggleBrowser");
+
+function applyBrowserVisibility(on) {
+  trBrowser.style.display = on ? "flex" : "none";
+  trTerm.style.display = on ? "none" : "flex";
+  toggleBtn.textContent = on ? "browser an" : "browser aus";
+  toggleBtn.classList.toggle("on", on);
+}
+function setBrowser(on) {
+  brOn = on;
+  applyBrowserVisibility(on);
+  if (!on) {
+    openCell("shell2");
+    requestAnimationFrame(() => { fitCell("shell2"); if (cells.shell2) cells.shell2.t.focus(); });
+  }
+  saveLayout();
+}
+toggleBtn.addEventListener("click", () => setBrowser(!brOn));
+document.getElementById("b-toterm").addEventListener("click", () => setBrowser(false));
+document.getElementById("b-tobrowser").addEventListener("click", () => setBrowser(true));
+
+// --- Webview ---
+const wv = document.getElementById("wv");
+const url = document.getElementById("url");
+function navigate() {
+  let u = url.value.trim();
+  if (!u) return;
+  if (!/^https?:\/\//.test(u)) u = "http://" + u;
+  url.value = u;
+  try { wv.loadURL(u); } catch (_) { wv.src = u; }
+}
+url.addEventListener("keydown", (e) => { if (e.key === "Enter") navigate(); });
+document.getElementById("b-back").addEventListener("click", () => { try { if (wv.canGoBack()) wv.goBack(); } catch (_) {} });
+document.getElementById("b-fwd").addEventListener("click", () => { try { if (wv.canGoForward()) wv.goForward(); } catch (_) {} });
+document.getElementById("b-reload").addEventListener("click", () => { try { wv.reload(); } catch (_) {} });
+wv.addEventListener("did-navigate", (e) => { if (e.url && e.url !== "about:blank") url.value = e.url; });
+
+function toggleDevtools() {
+  try { wv.isDevToolsOpened() ? wv.closeDevTools() : wv.openDevTools(); } catch (_) {}
+}
+document.getElementById("b-devtools").addEventListener("click", toggleDevtools);
+
+// Test-Steuerung
+window.devbox.onCtlNav((u) => { if (!brOn) setBrowser(true); url.value = u; navigate(); });
+window.devbox.onCtlToggle(() => setBrowser(!brOn));
+window.devbox.onCtlDevtools(() => toggleDevtools());
+
+// --- Splitter (unabhaengig links/rechts) ---
+const grid = document.getElementById("grid");
+
+let refitScheduled = false;
+function scheduleRefit() {
+  if (refitScheduled) return;
+  refitScheduled = true;
+  requestAnimationFrame(() => { refitScheduled = false; refitAll(); });
+}
+
+function startDrag(mv, up) {
+  document.body.classList.add("dragging"); // Pointer-Events von Webview/Terminals aus
+  const onMove = (ev) => mv(ev);
+  const onUp = () => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.classList.remove("dragging");
+    refitAll();
+    saveLayout();
+    if (up) up();
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+function dragV(handle, target) {
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const startX = e.clientX, startW = target.getBoundingClientRect().width;
+    const max = grid.getBoundingClientRect().width - 200;
+    startDrag((ev) => {
+      target.style.flex = "0 0 " + Math.max(200, Math.min(max, startW + ev.clientX - startX)) + "px";
+      scheduleRefit();
+    });
+  });
+}
+function dragH(handle) {
+  const top = document.getElementById(handle.dataset.target);
+  const col = top.parentElement;
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const startY = e.clientY, startH = top.getBoundingClientRect().height;
+    const max = col.getBoundingClientRect().height - 70;
+    startDrag((ev) => {
+      top.style.flex = "0 0 " + Math.max(70, Math.min(max, startH + ev.clientY - startY)) + "px";
+      scheduleRefit();
+    });
+  });
+}
+dragV(document.getElementById("vsplit"), document.getElementById("colL"));
+document.querySelectorAll(".hsplit").forEach(dragH);
+
+function refitAll() {
+  ["edit", "shell", "ai"].forEach(fitCell);
+  if (!brOn) fitCell("shell2");
+}
+let rt = null;
+window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(refitAll, 60); });
+
+// --- Globale Tastatur: Alt+1..4 Fokus, Alt+B Browser ---
+window.addEventListener("keydown", (e) => {
+  if (e.key === "F12") { toggleDevtools(); e.preventDefault(); e.stopPropagation(); return; }
+  if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+    if (e.key >= "1" && e.key <= "4") { focusCell(Number(e.key)); e.preventDefault(); e.stopPropagation(); }
+    else if (e.key === "b" || e.key === "B") { setBrowser(!brOn); e.preventDefault(); e.stopPropagation(); }
+  }
+}, true);
+
+// --- SSH-Verbindungsmanager ---
+const sshModal = document.getElementById("sshModal");
+const connListEl = document.getElementById("connList");
+const connForm = document.getElementById("connForm");
+function fval(id) { return document.getElementById(id).value.trim(); }
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+}
+
+function showSsh() { sshModal.style.display = "flex"; connForm.style.display = "none"; renderConns(); }
+function hideSsh() { sshModal.style.display = "none"; }
+document.getElementById("sshBtn").addEventListener("click", showSsh);
+document.getElementById("sshClose").addEventListener("click", hideSsh);
+sshModal.addEventListener("mousedown", (e) => { if (e.target === sshModal) hideSsh(); });
+
+async function renderConns() {
+  const { connections, activeId } = await window.devbox.connList();
+  connListEl.innerHTML = "";
+  connections.forEach((c) => {
+    const active = c.id === activeId;
+    const row = document.createElement("div");
+    row.className = "conn-row" + (active ? " active" : "");
+    const info = document.createElement("div");
+    info.innerHTML =
+      '<div class="conn-name">' + escHtml(c.name || c.host) + (active ? '<span class="badge">aktiv</span>' : "") + "</div>" +
+      '<div class="conn-sub">' + escHtml(c.username) + "@" + escHtml(c.host) + ":" + (c.port || 22) + "</div>";
+    const btns = document.createElement("div");
+    btns.className = "conn-btns";
+    const bConn = document.createElement("button");
+    bConn.textContent = active ? "verbunden" : "verbinden";
+    bConn.disabled = active;
+    bConn.addEventListener("click", () => { window.devbox.connActivate(c.id); hideSsh(); });
+    const bEdit = document.createElement("button");
+    bEdit.textContent = "bearbeiten";
+    bEdit.addEventListener("click", () => editConn(c));
+    btns.append(bConn, bEdit);
+    if (connections.length > 1) {
+      const bDel = document.createElement("button");
+      bDel.textContent = "loeschen";
+      bDel.addEventListener("click", () => { if (confirm("Verbindung loeschen: " + (c.name || c.host) + "?")) window.devbox.connDelete(c.id); });
+      btns.append(bDel);
+    }
+    row.append(info, btns);
+    connListEl.appendChild(row);
+  });
+}
+
+function editConn(c) {
+  connForm.style.display = "block";
+  document.getElementById("f-id").value = c ? c.id : "";
+  document.getElementById("f-name").value = c ? c.name || "" : "";
+  document.getElementById("f-host").value = c ? c.host : "";
+  document.getElementById("f-port").value = c ? c.port || 22 : 22;
+  document.getElementById("f-user").value = c ? c.username : "";
+  document.getElementById("f-key").value = c ? c.keyPath : "~/.ssh/id_ed25519";
+}
+document.getElementById("addConn").addEventListener("click", () => editConn(null));
+document.getElementById("f-cancel").addEventListener("click", () => { connForm.style.display = "none"; });
+document.getElementById("f-save").addEventListener("click", () => {
+  const host = fval("f-host"), user = fval("f-user"), key = fval("f-key");
+  if (!host || !user || !key) { alert("Host, Benutzer und Key-Pfad sind noetig."); return; }
+  const profile = { id: fval("f-id") || undefined, name: fval("f-name") || host, host, port: Number(fval("f-port")) || 22, username: user, keyPath: key };
+  window.devbox.connSave(profile);
+  connForm.style.display = "none";
+});
+
+window.devbox.onConnChanged(() => { if (sshModal.style.display !== "none") renderConns(); });
+window.devbox.onCtlSsh(() => showSsh());
+window.devbox.onReset(() => {
+  Object.values(cells).forEach((c) => { c.opened = false; try { c.t.reset(); } catch (_) {} });
+});
+
+// --- Start ---
+restoreLayout();
+brOn = LS.get("db_browser", "1") === "1";
+applyBrowserVisibility(brOn);
+ensureCell("edit");
+ensureCell("shell");
+ensureCell("ai");
+window.devbox.connect();

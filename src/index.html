@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self';"
+    />
+    <title>devbox</title>
+    <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css" />
+    <style>
+      :root {
+        --bg: #181825;
+        --surface: #1e1e2e;
+        --header: #11111b;
+        --border: #313145;
+        --text: #cdd6f4;
+        --muted: #7f849c;
+        --accent: #89b4fa;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; height: 100%; background: var(--bg);
+        overflow: hidden; font-family: "JetBrainsMono NFM", "JetBrains Mono", Consolas, monospace;
+      }
+      #app { display: flex; flex-direction: column; height: 100vh; }
+      #topbar {
+        height: 30px; display: flex; align-items: center; gap: 10px;
+        padding: 0 10px; background: #252538; border-bottom: 1px solid var(--border);
+        font-size: 12px; color: var(--text); flex: 0 0 auto;
+      }
+      #topbar .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+      #status { color: var(--muted); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tbtn {
+        font: 12px inherit; color: var(--muted); background: transparent;
+        border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer;
+      }
+      .tbtn:hover { color: var(--text); }
+      .tbtn.on { color: var(--accent); border-color: var(--accent); background: rgba(137,180,250,0.14); }
+      #grid { flex: 1 1 auto; display: flex; min-height: 0; }
+      .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+      #colL { flex: 0 0 58%; }
+      #colR { flex: 1 1 auto; }
+      .cell { position: relative; display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--surface); overflow: hidden; }
+      .cell.top { flex: 0 0 55%; }
+      .cell.bottom { flex: 1 1 auto; }
+      .cell.active { box-shadow: inset 0 0 0 1px var(--accent); }
+      .cell.active .chead { color: var(--accent); }
+      .chead {
+        height: 22px; flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+        padding: 0 8px; background: var(--header); border-bottom: 1px solid var(--border);
+        font-size: 11.5px; color: var(--text);
+      }
+      .chead .tag { color: var(--muted); margin-left: auto; font-size: 10.5px; }
+      .cbody { flex: 1 1 auto; min-height: 0; position: relative; }
+      .term { position: absolute; inset: 0; padding: 3px 5px; }
+      .vsplit { flex: 0 0 6px; cursor: col-resize; background: var(--border); }
+      .vsplit:hover { background: var(--accent); }
+      .hsplit { flex: 0 0 6px; cursor: row-resize; background: var(--border); }
+      .hsplit:hover { background: var(--accent); }
+      body.dragging { user-select: none; }
+      body.dragging webview, body.dragging .term { pointer-events: none; }
+
+      #tr-browser { position: absolute; inset: 0; display: flex; flex-direction: column; }
+      #tr-term { position: absolute; inset: 0; display: none; flex-direction: column; }
+      .bbar { height: 28px; flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 0 7px; background: var(--header); border-bottom: 1px solid var(--border); }
+      .bbar button { font: 14px inherit; color: var(--muted); background: transparent; border: none; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+      .bbar button:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+      #url { flex: 1 1 auto; height: 20px; font: 11.5px inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 0 8px; outline: none; }
+      #url:focus { border-color: var(--accent); }
+      webview { flex: 1 1 auto; width: 100%; background: #fff; }
+      .xterm-viewport { scrollbar-width: none; }
+      .xterm-viewport::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+      .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: none; align-items: center; justify-content: center; z-index: 50; }
+      .modal-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; width: 470px; max-width: 92vw; max-height: 86vh; overflow: auto; padding: 14px 16px; color: var(--text); font-size: 13px; }
+      .modal-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; margin-bottom: 12px; }
+      .xbtn { background: transparent; border: none; color: var(--muted); font-size: 20px; cursor: pointer; line-height: 1; }
+      .xbtn:hover { color: var(--text); }
+      .conn-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; }
+      .conn-row.active { border-color: var(--accent); }
+      .conn-name { font-size: 13px; }
+      .conn-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+      .badge { font-size: 10px; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+      .conn-btns { display: flex; gap: 6px; flex: 0 0 auto; }
+      .conn-btns button { font: 11px inherit; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+      .conn-btns button:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+      .conn-btns button:disabled { opacity: .5; cursor: default; }
+      #connForm { display: none; margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+      #connForm label { display: block; font-size: 11px; color: var(--muted); margin: 8px 0 3px; }
+      #connForm input { width: 100%; height: 28px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font: 12px inherit; padding: 0 8px; outline: none; }
+      #connForm input:focus { border-color: var(--accent); }
+      .form-btns { display: flex; gap: 8px; margin-top: 14px; }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="topbar">
+        <span style="letter-spacing:.3px">devbox</span>
+        <span id="status">starte ...</span>
+        <button id="sshBtn" class="tbtn" style="margin-left:auto">&#128279; SSH</button>
+        <button id="toggleBrowser" class="tbtn on">browser an</button>
+      </div>
+
+      <div id="grid">
+        <div id="colL" class="col">
+          <div id="cell-edit" class="cell top">
+            <div class="chead"><span>nvim</span><span class="tag">edit</span></div>
+            <div class="cbody"><div class="term" id="term-edit"></div></div>
+          </div>
+          <div class="hsplit" data-target="cell-edit"></div>
+          <div id="cell-shell" class="cell bottom">
+            <div class="chead"><span>konsole</span><span class="tag">shell</span></div>
+            <div class="cbody"><div class="term" id="term-shell"></div></div>
+          </div>
+        </div>
+
+        <div class="vsplit" id="vsplit"></div>
+
+        <div id="colR" class="col">
+          <div id="cell-tr" class="cell top">
+            <div id="tr-browser">
+              <div class="bbar">
+                <button id="b-back" title="zurueck">&#9664;</button>
+                <button id="b-fwd" title="vor">&#9654;</button>
+                <button id="b-reload" title="neu laden">&#8635;</button>
+                <input id="url" value="http://localhost:5173" spellcheck="false" />
+                <button id="b-devtools" title="DevTools (F12)">&#9881;</button>
+                <button id="b-toterm" title="zur Konsole">&#9632;</button>
+              </div>
+              <webview id="wv" src="about:blank" allowpopups></webview>
+            </div>
+            <div id="tr-term">
+              <div class="chead"><span>konsole 2</span><button id="b-tobrowser" class="tbtn" style="margin-left:auto;padding:1px 7px">browser</button></div>
+              <div class="cbody"><div class="term" id="term-shell2"></div></div>
+            </div>
+          </div>
+          <div class="hsplit" data-target="cell-tr"></div>
+          <div id="cell-ai" class="cell bottom">
+            <div class="chead"><span>codex / ai</span><span class="tag">ai</span></div>
+            <div class="cbody"><div class="term" id="term-ai"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="sshModal" class="modal">
+      <div class="modal-card">
+        <div class="modal-head"><span>SSH-Verbindungen</span><button id="sshClose" class="xbtn">&times;</button></div>
+        <div id="connList"></div>
+        <button id="addConn" class="tbtn" style="margin-top:6px">+ Neue Verbindung</button>
+        <div id="connForm">
+          <input type="hidden" id="f-id" />
+          <label>Name</label><input id="f-name" placeholder="z.B. devbox" />
+          <label>Host</label><input id="f-host" placeholder="192.168.1.10 / host" spellcheck="false" />
+          <label>Port</label><input id="f-port" value="22" />
+          <label>Benutzer</label><input id="f-user" placeholder="user" spellcheck="false" />
+          <label>Key-Pfad</label><input id="f-key" placeholder="~/.ssh/id_ed25519" spellcheck="false" />
+          <div class="form-btns"><button id="f-save" class="tbtn">Speichern</button><button id="f-cancel" class="tbtn">Abbrechen</button></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+    <script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

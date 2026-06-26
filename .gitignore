@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+__ctl
+shot.png
+connections.json
+*.bak-*
