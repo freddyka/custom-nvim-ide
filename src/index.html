@@ -86,10 +86,10 @@
       .conn-btns button { font: 11px inherit; color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
       .conn-btns button:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
       .conn-btns button:disabled { opacity: .5; cursor: default; }
-      #connForm { display: none; margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
-      #connForm label { display: block; font-size: 11px; color: var(--muted); margin: 8px 0 3px; }
-      #connForm input { width: 100%; height: 28px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font: 12px inherit; padding: 0 8px; outline: none; }
-      #connForm input:focus { border-color: var(--accent); }
+      #connForm, #sessForm { display: none; margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+      #connForm label, #sessForm label { display: block; font-size: 11px; color: var(--muted); margin: 8px 0 3px; }
+      #connForm input, #sessForm input { width: 100%; height: 28px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font: 12px inherit; padding: 0 8px; outline: none; }
+      #connForm input:focus, #sessForm input:focus { border-color: var(--accent); }
       .form-btns { display: flex; gap: 8px; margin-top: 14px; }
     </style>
   </head>
@@ -98,7 +98,8 @@
       <div id="topbar">
         <span style="letter-spacing:.3px">devbox</span>
         <span id="status">starte ...</span>
-        <button id="sshBtn" class="tbtn" style="margin-left:auto">&#128279; SSH</button>
+        <button id="sessBtn" class="tbtn" style="margin-left:auto">&#128194; <span id="sessName">main</span></button>
+        <button id="sshBtn" class="tbtn">&#128279; SSH</button>
         <button id="toggleBrowser" class="tbtn on">browser an</button>
       </div>
 
@@ -157,6 +158,20 @@
           <label>Benutzer</label><input id="f-user" placeholder="user" spellcheck="false" />
           <label>Key-Pfad</label><input id="f-key" placeholder="~/.ssh/id_ed25519" spellcheck="false" />
           <div class="form-btns"><button id="f-save" class="tbtn">Speichern</button><button id="f-cancel" class="tbtn">Abbrechen</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="sessModal" class="modal">
+      <div class="modal-card">
+        <div class="modal-head"><span>Sessions</span><button id="sessClose" class="xbtn">&times;</button></div>
+        <div id="sessList"></div>
+        <button id="addSess" class="tbtn" style="margin-top:6px">+ Neue Session</button>
+        <div id="sessForm">
+          <input type="hidden" id="sf-old" />
+          <label id="sf-label">Name der neuen Session</label>
+          <input id="sf-name" placeholder="z.B. projekt-x" spellcheck="false" />
+          <div class="form-btns"><button id="sf-save" class="tbtn">Speichern</button><button id="sf-cancel" class="tbtn">Abbrechen</button></div>
         </div>
       </div>
     </div>

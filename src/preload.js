@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("devbox", {
   onCtlToggle: (cb) => ipcRenderer.on("ctl:toggle", () => cb()),
   onCtlDevtools: (cb) => ipcRenderer.on("ctl:devtools", () => cb()),
   onCtlSsh: (cb) => ipcRenderer.on("ctl:ssh", () => cb()),
+  onCtlSess: (cb) => ipcRenderer.on("ctl:sess", () => cb()),
 
   connList: () => ipcRenderer.invoke("conn:list"),
   connSave: (profile) => ipcRenderer.send("conn:save", profile),
@@ -26,4 +27,11 @@ contextBridge.exposeInMainWorld("devbox", {
   connActivate: (id) => ipcRenderer.send("conn:activate", id),
   onConnChanged: (cb) => ipcRenderer.on("conn:changed", () => cb()),
   onReset: (cb) => ipcRenderer.on("app:reset", () => cb()),
+
+  sessionList: () => ipcRenderer.invoke("session:list"),
+  sessionCreate: (name) => ipcRenderer.send("session:create", name),
+  sessionRename: (from, to) => ipcRenderer.send("session:rename", { from, to }),
+  sessionDelete: (name) => ipcRenderer.send("session:delete", name),
+  sessionActivate: (name) => ipcRenderer.send("session:activate", name),
+  onSessionChanged: (cb) => ipcRenderer.on("session:changed", () => cb()),
 });

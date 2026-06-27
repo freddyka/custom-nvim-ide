@@ -331,6 +331,80 @@ document.getElementById("f-save").addEventListener("click", () => {
 
 window.devbox.onConnChanged(() => { if (sshModal.style.display !== "none") renderConns(); });
 window.devbox.onCtlSsh(() => showSsh());
+
+// --- Session-Manager (mehrere benannte Sessions) ---
+const sessModal = document.getElementById("sessModal");
+const sessListEl = document.getElementById("sessList");
+const sessForm = document.getElementById("sessForm");
+const sessNameEl = document.getElementById("sessName");
+
+function showSess() { sessModal.style.display = "flex"; sessForm.style.display = "none"; renderSessions(); }
+function hideSess() { sessModal.style.display = "none"; }
+document.getElementById("sessBtn").addEventListener("click", showSess);
+document.getElementById("sessClose").addEventListener("click", hideSess);
+sessModal.addEventListener("mousedown", (e) => { if (e.target === sessModal) hideSess(); });
+
+async function renderSessions() {
+  const { sessions, active } = await window.devbox.sessionList();
+  sessNameEl.textContent = active;
+  sessListEl.innerHTML = "";
+  sessions.forEach((name) => {
+    const isActive = name === active;
+    const row = document.createElement("div");
+    row.className = "conn-row" + (isActive ? " active" : "");
+    const info = document.createElement("div");
+    info.innerHTML = '<div class="conn-name">' + escHtml(name) + (isActive ? '<span class="badge">aktiv</span>' : "") + "</div>";
+    const btns = document.createElement("div");
+    btns.className = "conn-btns";
+    const bOpen = document.createElement("button");
+    bOpen.textContent = isActive ? "offen" : "oeffnen";
+    bOpen.disabled = isActive;
+    bOpen.addEventListener("click", () => { window.devbox.sessionActivate(name); hideSess(); });
+    const bRen = document.createElement("button");
+    bRen.textContent = "umbenennen";
+    bRen.addEventListener("click", () => editSession(name));
+    btns.append(bOpen, bRen);
+    if (sessions.length > 1) {
+      const bDel = document.createElement("button");
+      bDel.textContent = "loeschen";
+      bDel.addEventListener("click", () => { if (confirm("Session loeschen: " + name + "?  (Die Terminals dieser Session werden beendet)")) window.devbox.sessionDelete(name); });
+      btns.append(bDel);
+    }
+    row.append(info, btns);
+    sessListEl.appendChild(row);
+  });
+}
+
+function editSession(oldName) {
+  sessForm.style.display = "block";
+  document.getElementById("sf-old").value = oldName || "";
+  document.getElementById("sf-label").textContent = oldName ? "Session umbenennen (" + oldName + ")" : "Name der neuen Session";
+  const inp = document.getElementById("sf-name");
+  inp.value = oldName || "";
+  inp.focus();
+}
+document.getElementById("addSess").addEventListener("click", () => editSession(null));
+document.getElementById("sf-cancel").addEventListener("click", () => { sessForm.style.display = "none"; });
+document.getElementById("sf-save").addEventListener("click", () => {
+  const oldName = document.getElementById("sf-old").value;
+  const name = document.getElementById("sf-name").value.trim();
+  if (!name) { alert("Name noetig."); return; }
+  if (oldName) window.devbox.sessionRename(oldName, name);
+  else window.devbox.sessionCreate(name);
+  sessForm.style.display = "none";
+  hideSess();
+});
+document.getElementById("sf-name").addEventListener("keydown", (e) => { if (e.key === "Enter") document.getElementById("sf-save").click(); });
+
+function refreshSessName() {
+  window.devbox.sessionList().then(({ active }) => { sessNameEl.textContent = active; });
+}
+window.devbox.onSessionChanged(() => {
+  refreshSessName();
+  if (sessModal.style.display !== "none") renderSessions();
+});
+window.devbox.onCtlSess(() => showSess());
+refreshSessName();
 window.devbox.onReset(() => {
   Object.values(cells).forEach((c) => { c.opened = false; try { c.t.reset(); } catch (_) {} });
 });

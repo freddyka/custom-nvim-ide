@@ -8,6 +8,15 @@
 
 ![devbox screenshot](assets/screenshot.png)
 
+## Download
+
+Grab a single self-contained file from the [**Releases**](https://github.com/freddyka/custom-nvim-ide/releases) page — no install, no zip to unpack:
+
+- **Windows** — `devbox-<version>-portable.exe` (portable, just double-click)
+- **Linux** — `devbox-<version>.AppImage` (`chmod +x`, run — integrates as a desktop app with the icon)
+
+Or build it yourself: `npm install` then `npm run dist:win` / `npm run dist:linux`.
+
 ## What this is
 
 This is my personal IDE. Instead of a heavyweight editor, it's a small Electron app that shows a **2×2 grid** where every cell is a real terminal ([xterm.js](https://xtermjs.org/)) connected over SSH to my dev machine — plus one cell that holds a **real Chromium browser** so I can preview the site I'm building right next to the code.
@@ -38,11 +47,13 @@ Everything runs on the remote machine inside persistent `tmux` sessions, so my w
 - 2×2 grid with **independently resizable** panes
 - **Real browser** cell with DevTools + right-click context menu — toggle it to a shell when you don't need it
 - **SSH connection manager** — multiple hosts, switch live
+- **Named sessions** — several independent workspaces, each with its own terminals; switch / rename / delete
+- **Auto-save & restore** — the session is saved continuously and comes back after a reboot
 - **Native clipboard** (`Ctrl+Shift+C` / `Ctrl+Shift+V`, middle-click paste)
 - **Layout is remembered** between sessions
 - Runs on **Windows and Linux** (connects over SSH, or to `localhost` when run on the dev machine itself)
 
-## Keybindings
+## App keybindings
 
 | Key | Action |
 |---|---|
@@ -51,12 +62,31 @@ Everything runs on the remote machine inside persistent `tmux` sessions, so my w
 | `F12` | DevTools (browser cell) |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copy / paste |
 
+## Editor keymaps (Neovim)
+
+The editor cell uses my own Windows-style, **modeless** Neovim keymaps — copy/cut/paste
+return you to insert mode. They live in [`nvim/`](nvim/) and drop into any AstroNvim setup.
+
+| Key | Action |
+|---|---|
+| `Ctrl+S` · `F5` | save · run the current file |
+| `Ctrl+Y` · `Ctrl+C` · `Ctrl+P` | copy · cut · paste |
+| `Ctrl+G` · `Ctrl+A` · `Ctrl+K` | start selection · select all · comment selection |
+| `Ctrl+→` / `Ctrl+←` | next / previous buffer |
+| completion | `↑↓←→` move in code · `Tab` steps into the popup · `Tab`/`Enter` inserts |
+
+Full list + install in [`nvim/README.md`](nvim/README.md).
+
 ## Run
+
+From source:
 
 ```bash
 npm install
 npm start
 ```
+
+Or download a prebuilt single file from [Releases](https://github.com/freddyka/custom-nvim-ide/releases) (see [Download](#download)).
 
 Add your SSH host with the **🔗 SSH** button in the app, or via environment variables `DEVBOX_HOST`, `DEVBOX_USER`, `DEVBOX_KEY`.
 

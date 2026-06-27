@@ -4,7 +4,9 @@
   "description": "My custom IDE: a 2x2 grid of real terminals (nvim, shells, AI) plus a real browser, all over SSH. Electron + xterm.js + ssh2.",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist:win": "electron-builder --win portable",
+    "dist:linux": "electron-builder --linux AppImage"
   },
   "author": "freddyka",
   "license": "MIT",
@@ -13,8 +15,30 @@
     "url": "https://github.com/freddyka/custom-nvim-ide.git"
   },
   "homepage": "https://github.com/freddyka/custom-nvim-ide#readme",
+  "build": {
+    "appId": "com.freddyka.devbox",
+    "productName": "devbox",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "portable",
+      "icon": "assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "devbox-${version}-portable.exe"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon-512.png",
+      "category": "Development",
+      "artifactName": "devbox-${version}.AppImage"
+    }
+  },
   "devDependencies": {
-    "electron": "^33.2.0"
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

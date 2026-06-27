@@ -5,6 +5,9 @@ const fs = require("fs");
 const net = require("net");
 const { Client } = require("ssh2");
 
+// userData bleibt %APPDATA%/devbox-app bzw. ~/.config/devbox-app, egal wie das Build-Produkt heisst.
+app.setName("devbox-app");
+
 // Standard-Verbindung. Ueberschreibbar per Umgebungsvariablen (DEVBOX_HOST/PORT/USER/KEY)
 // oder im SSH-Manager der App. Die eigene Verbindung wird in connections.json gespeichert.
 const CONN = {
@@ -14,14 +17,9 @@ const CONN = {
   keyPath: process.env.DEVBOX_KEY || path.join(os.homedir(), ".ssh", "id_ed25519"),
 };
 
-// Startbefehl je Zelle: jede Zelle haengt an EINER eigenen, persistenten tmux-Session.
-// "-A" = anhaengen falls vorhanden, sonst erstellen -> ueberlebt App-Neustart.
-const STARTUP = {
-  edit: "clear; tmux new-session -A -s edit nvim\n",
-  shell: "clear; tmux new-session -A -s shell\n",
-  ai: "clear; tmux new-session -A -s ai\n",
-  shell2: "clear; tmux new-session -A -s shell2\n",
-};
+// Programm je Zelle. Jede Zelle haengt an einer eigenen tmux-Session,
+// deren Name von der aktiven App-Session abhaengt (siehe tmuxName).
+const CELL_PROG = { edit: "nvim", shell: "", ai: "", shell2: "" };
 
 // Dev-Ports, die lokal (Windows/127.0.0.1) auf den Laptop getunnelt werden.
 const FORWARD_PORTS = [3000, 4173, 5173, 8000, 8080];
@@ -37,6 +35,23 @@ let forwardServers = [];
 let connFile = null;
 let connections = [];
 let activeId = null;
+
+// Benannte App-Sessions (verwaltbar ueber den Sessions-Button)
+let sessFile = null;
+let sessions = ["main"];
+let activeSession = "main";
+
+// tmux-Sessionname je Zelle, abhaengig von der aktiven App-Session.
+// "main" nutzt die schlichten Namen (edit/shell/ai/shell2), andere bekommen ein Praefix.
+function tmuxName(id) {
+  return activeSession === "main" ? id : activeSession + "-" + id;
+}
+function startupCmd(id) {
+  return "clear; tmux new-session -A -s " + tmuxName(id) + " " + (CELL_PROG[id] || "") + "\n";
+}
+function sanitizeSessionName(name) {
+  return String(name || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
+}
 
 function send(channel, payload) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -67,7 +82,36 @@ function saveConnections() {
 function activeProfile() {
   return connections.find((c) => c.id === activeId) || connections[0] || CONN;
 }
+
+function loadSessions() {
+  sessFile = path.join(app.getPath("userData"), "sessions.json");
+  try {
+    const d = JSON.parse(fs.readFileSync(sessFile, "utf8"));
+    if (Array.isArray(d.sessions) && d.sessions.length) sessions = d.sessions;
+    if (d.active) activeSession = d.active;
+  } catch (_) {}
+  if (!sessions.length) sessions = ["main"];
+  if (sessions.indexOf(activeSession) < 0) activeSession = sessions[0];
+}
+function saveSessionsFile() {
+  try { fs.writeFileSync(sessFile, JSON.stringify({ sessions: sessions, active: activeSession }, null, 2)); } catch (_) {}
+}
+function activateSessionName(name) {
+  if (sessions.indexOf(name) < 0) return;
+  activeSession = name;
+  saveSessionsFile();
+  teardown();
+  send("app:reset");
+  send("session:changed");
+  setTimeout(connectSSH, 200);
+}
+function tmuxSessionsOf(name) {
+  return ["edit", "shell", "ai", "shell2"].map(function (id) {
+    return name === "main" ? id : name + "-" + id;
+  });
+}
 function teardown() {
+  stopAutosave();
   Object.keys(channels).forEach((id) => { try { channels[id].close(); } catch (_) {} delete channels[id]; });
   forwardServers.forEach((s) => { try { s.close(); } catch (_) {} });
   forwardServers = [];
@@ -75,6 +119,25 @@ function teardown() {
   conn = null;
   ready = false;
   connecting = false;
+}
+
+// --- Autosave: regelmaessig + beim Schliessen die tmux/nvim-Session sichern ---
+var saveTimer = null;
+function saveSession(cb) {
+  if (!conn || !ready) { if (cb) cb(); return; }
+  conn.exec("tmux list-sessions >/dev/null 2>&1 && ~/.tmux/plugins/tmux-resurrect/scripts/save.sh quiet >/dev/null 2>&1; echo SAVED", function (err, stream) {
+    if (err || !stream) { if (cb) cb(); return; }
+    stream.on("data", function () {});
+    if (stream.stderr) stream.stderr.on("data", function () {});
+    stream.on("close", function () { if (cb) cb(); });
+  });
+}
+function startAutosave() {
+  stopAutosave();
+  saveTimer = setInterval(function () { saveSession(); }, 120000); // alle 2 Minuten
+}
+function stopAutosave() {
+  if (saveTimer) { clearInterval(saveTimer); saveTimer = null; }
 }
 
 function createWindow() {
@@ -132,9 +195,26 @@ function connectSSH() {
     ready = true;
     connecting = false;
     console.log("[ssh] verbunden mit " + profile.host);
-    send("app:status", "verbunden: " + profile.name);
-    send("app:ready", true);
+    send("app:status", "verbunden: " + profile.name + " - lade Session ...");
     FORWARD_PORTS.forEach((p) => setupForward(p, p));
+    // Nach einem Reboot laeuft evtl. kein tmux-Server. Einen Server zu starten loest
+    // tmux-continuum/resurrect aus (Sessions samt Inhalt werden wiederhergestellt).
+    // Erst danach die Zellen oeffnen, damit sie sich an die restorten Sessions haengen.
+    var boot = "if ! tmux list-sessions 2>/dev/null | grep -q .; then " +
+      "tmux new-session -d -s __boot 2>/dev/null; sleep 4; tmux kill-session -t __boot 2>/dev/null; " +
+      "echo RESTORED; fi; echo BOOT_DONE";
+    conn.exec(boot, function (err, stream) {
+      if (err || !stream) { send("app:ready", true); send("app:status", "verbunden: " + profile.name); return; }
+      var out = "";
+      stream.on("data", function (d) { out += d.toString(); });
+      if (stream.stderr) stream.stderr.on("data", function () {});
+      stream.on("close", function () {
+        if (out.indexOf("RESTORED") >= 0) console.log("[boot] Session nach Reboot wiederhergestellt");
+        send("app:status", "verbunden: " + profile.name);
+        send("app:ready", true);
+        startAutosave();
+      });
+    });
   });
 
   conn.on("error", (e) => {
@@ -178,8 +258,8 @@ function openChannel(id, cols, rows) {
       return;
     }
     channels[id] = stream;
-    console.log("[ch " + id + "] offen " + cols + "x" + rows);
-    if (STARTUP[id]) stream.write(STARTUP[id]);
+    console.log("[ch " + id + "] offen " + cols + "x" + rows + " (" + tmuxName(id) + ")");
+    stream.write(startupCmd(id));
     stream.on("data", (d) => send("channel:data", { id, data: d.toString("utf8") }));
     if (stream.stderr) {
       stream.stderr.on("data", (d) => send("channel:data", { id, data: d.toString("utf8") }));
@@ -193,6 +273,8 @@ function openChannel(id, cols, rows) {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === "win32") app.setAppUserModelId("com.freddyka.devbox");
+
   // Rechtsklick-Kontextmenue + DevTools fuer die Browser-Zelle (webview)
   app.on("web-contents-created", (_e, contents) => {
     if (contents.getType() !== "webview") return;
@@ -220,6 +302,7 @@ app.whenReady().then(() => {
   });
 
   loadConnections();
+  loadSessions();
   createWindow();
 
   // Test-/Steuer-Hook (nur mit DEVBOX_DEV=1): Datei "__ctl" -> shot|nav|toggle|devtools|ssh|switch
@@ -255,6 +338,19 @@ app.whenReady().then(() => {
         console.log("[ctl] switch -> " + next);
         activateConn(next);
       }
+    } else if (cmd === "sess") {
+      send("ctl:sess");
+      console.log("[ctl] sess");
+    } else if (cmd.indexOf("sessnew ") === 0) {
+      const n = sanitizeSessionName(cmd.slice(8));
+      if (n && sessions.indexOf(n) < 0) {
+        sessions.push(n); saveSessionsFile(); send("session:changed");
+        console.log("[ctl] sessnew " + n);
+        activateSessionName(n);
+      }
+    } else if (cmd.indexOf("sessto ") === 0) {
+      console.log("[ctl] sessto " + cmd.slice(7).trim());
+      activateSessionName(cmd.slice(7).trim());
     }
   });
   }
@@ -293,6 +389,51 @@ app.whenReady().then(() => {
   }
   ipcMain.on("conn:activate", (e, id) => activateConn(id));
 
+  // App-Session-Verwaltung (mehrere benannte Sessions)
+  function runExec(cmd) {
+    if (!conn || !ready) return;
+    conn.exec(cmd, (err, st) => {
+      if (!st) return;
+      st.on("data", () => {});
+      if (st.stderr) st.stderr.on("data", () => {});
+      st.on("close", () => {});
+    });
+  }
+  ipcMain.handle("session:list", () => ({ sessions: sessions, active: activeSession }));
+  ipcMain.on("session:create", (e, rawName) => {
+    const name = sanitizeSessionName(rawName);
+    if (!name || sessions.indexOf(name) >= 0) return;
+    sessions.push(name);
+    saveSessionsFile();
+    send("session:changed");
+    activateSessionName(name);
+  });
+  ipcMain.on("session:rename", (e, payload) => {
+    const from = payload && payload.from;
+    const to = sanitizeSessionName(payload && payload.to);
+    const i = sessions.indexOf(from);
+    if (i < 0 || !to || sessions.indexOf(to) >= 0) return;
+    const olds = tmuxSessionsOf(from), news = tmuxSessionsOf(to);
+    let cmd = "";
+    for (let k = 0; k < olds.length; k++) cmd += "tmux rename-session -t " + olds[k] + " " + news[k] + " 2>/dev/null; ";
+    runExec(cmd);
+    sessions[i] = to;
+    if (activeSession === from) activeSession = to;
+    saveSessionsFile();
+    send("session:changed");
+  });
+  ipcMain.on("session:delete", (e, name) => {
+    if (sessions.length <= 1 || sessions.indexOf(name) < 0) return;
+    runExec(tmuxSessionsOf(name).map((n) => "tmux kill-session -t " + n + " 2>/dev/null").join("; "));
+    const wasActive = activeSession === name;
+    sessions = sessions.filter((s) => s !== name);
+    if (wasActive) activeSession = sessions[0];
+    saveSessionsFile();
+    send("session:changed");
+    if (wasActive) activateSessionName(activeSession);
+  });
+  ipcMain.on("session:activate", (e, name) => activateSessionName(name));
+
   ipcMain.on("channel:open", (e, { id, cols, rows }) => openChannel(id, cols, rows));
   ipcMain.on("channel:input", (e, { id, data }) => {
     const s = channels[id];
@@ -316,15 +457,17 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-  Object.values(channels).forEach((s) => {
-    try {
-      s.close();
-    } catch (_) {}
+  // Beim Schliessen nochmal sichern, damit der letzte Stand erhalten bleibt.
+  stopAutosave();
+  saveSession(function () {
+    Object.values(channels).forEach((s) => {
+      try { s.close(); } catch (_) {}
+    });
+    if (conn) {
+      try { conn.end(); } catch (_) {}
+    }
+    app.quit();
   });
-  if (conn) {
-    try {
-      conn.end();
-    } catch (_) {}
-  }
-  app.quit();
+  // Sicherheitsnetz: falls Save haengt, trotzdem nach 3s beenden.
+  setTimeout(function () { try { app.quit(); } catch (_) {} }, 3000);
 });
