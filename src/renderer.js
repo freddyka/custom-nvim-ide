@@ -21,6 +21,24 @@ const LS = {
   set(k, v) { try { localStorage.setItem(k, String(v)); } catch (_) {} },
 };
 
+// Strg+B + Pfeil = zwischen den 4 Panes springen (wie tmux). Jedes andere Strg+B geht normal an tmux.
+const PANE_OF_TERM = { edit: "edit", shell: "shell", ai: "ai", shell2: "tr" }; // Terminal-Id -> Pane-Position
+const POS_OF = { edit: 1, shell: 2, tr: 3, ai: 4 };
+const PANE_NAV = {
+  edit:  { ArrowRight: "tr",   ArrowDown:  "shell" },
+  shell: { ArrowUp:    "edit", ArrowRight: "ai"    },
+  tr:    { ArrowLeft:  "edit", ArrowDown:  "ai"    },
+  ai:    { ArrowUp:    "tr",   ArrowLeft:  "shell" },
+};
+let prefixArmed = false, prefixId = null, prefixTimer = null;
+function armPrefix(id) {
+  prefixArmed = true; prefixId = id;
+  clearTimeout(prefixTimer);
+  // Sicherheit: kommt nach 1.5s keine Folgetaste, Prefix doch an tmux durchreichen
+  prefixTimer = setTimeout(() => { if (prefixArmed && prefixId) window.devbox.input(prefixId, "\x02"); prefixArmed = false; }, 1500);
+}
+function disarmPrefix() { prefixArmed = false; clearTimeout(prefixTimer); }
+
 function ensureCell(id) {
   if (cells[id]) return cells[id];
   const fs0 = Number(LS.get("db_font_" + id)) || 13;
@@ -33,6 +51,20 @@ function ensureCell(id) {
 
   t.attachCustomKeyEventHandler((e) => {
     if (e.type !== "keydown") return true;
+    // tmux-Prefix: nach Strg+B entscheidet die naechste Taste
+    if (prefixArmed) {
+      const nav = PANE_NAV[PANE_OF_TERM[id]];
+      const target = nav && nav[e.key];
+      if (target) { e.preventDefault(); disarmPrefix(); focusCell(POS_OF[target]); return false; } // Pfeil -> Pane wechseln
+      if (e.key === "Control" || e.key === "Shift" || e.key === "Alt" || e.key === "Meta") return false; // Modifier: scharf bleiben
+      disarmPrefix();
+      window.devbox.input(id, "\x02"); // echtes Prefix nachreichen, dann Taste normal an tmux (auch Strg+B Strg+B = send-prefix)
+      return true;
+    }
+    if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && (e.key === "b" || e.key === "B")) {
+      armPrefix(id); // Strg+B scharf machen, noch nicht senden
+      return false;
+    }
     if (e.ctrlKey && e.shiftKey && (e.key === "C" || e.key === "c")) {
       const sel = t.getSelection();
       if (sel) window.devbox.clipboardWrite(sel);
