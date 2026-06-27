@@ -49,6 +49,10 @@ function ensureCell(id) {
       window.devbox.clipboardRead().then((txt) => { if (txt) window.devbox.input(id, txt); });
     }
   });
+  document.getElementById(TERM_EL[id]).addEventListener("contextmenu", (e) => {
+    e.preventDefault(); // Rechtsklick -> eigenes Kopieren/Einfuegen-Menue
+    window.devbox.termMenu(id, !!t.getSelection());
+  });
 
   const c = { t, fit, inputDisp: null, opened: false };
   c.inputDisp = t.onData((d) => window.devbox.input(id, d));
@@ -118,6 +122,10 @@ function focusCell(pos) {
 const statusEl = document.getElementById("status");
 window.devbox.onAppStatus((s) => { statusEl.textContent = s || ""; });
 window.devbox.onData((p) => { const c = cells[p.id]; if (c) c.t.write(p.data); });
+
+window.devbox.onTermCopy((id) => { const c = cells[id]; if (c) { const s = c.t.getSelection(); if (s) window.devbox.clipboardWrite(s); } });
+window.devbox.onTermPaste((id) => { window.devbox.clipboardRead().then((txt) => { if (txt) window.devbox.input(id, txt); }); });
+window.devbox.onTermSelectAll((id) => { const c = cells[id]; if (c) c.t.selectAll(); });
 
 window.devbox.onChannelStatus((p) => {
   const c = cells[p.id];

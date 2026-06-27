@@ -451,6 +451,16 @@ app.whenReady().then(() => {
   ipcMain.handle("clipboard:read", () => clipboard.readText());
   ipcMain.on("clipboard:write", (e, text) => clipboard.writeText(text || ""));
 
+  // Rechtsklick-Menue (Kopieren/Einfuegen) fuer die Terminal-Zellen
+  ipcMain.on("term:menu", (e, { id, hasSelection }) => {
+    Menu.buildFromTemplate([
+      { label: "Kopieren", enabled: !!hasSelection, click: () => send("term:copy", id) },
+      { label: "Einfuegen", click: () => send("term:paste", id) },
+      { type: "separator" },
+      { label: "Alles markieren", click: () => send("term:selectall", id) },
+    ]).popup();
+  });
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

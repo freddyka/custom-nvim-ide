@@ -15,6 +15,11 @@ contextBridge.exposeInMainWorld("devbox", {
   clipboardRead: () => ipcRenderer.invoke("clipboard:read"),
   clipboardWrite: (text) => ipcRenderer.send("clipboard:write", text),
 
+  termMenu: (id, hasSelection) => ipcRenderer.send("term:menu", { id, hasSelection }),
+  onTermCopy: (cb) => ipcRenderer.on("term:copy", (_e, id) => cb(id)),
+  onTermPaste: (cb) => ipcRenderer.on("term:paste", (_e, id) => cb(id)),
+  onTermSelectAll: (cb) => ipcRenderer.on("term:selectall", (_e, id) => cb(id)),
+
   onCtlNav: (cb) => ipcRenderer.on("ctl:nav", (_e, u) => cb(u)),
   onCtlToggle: (cb) => ipcRenderer.on("ctl:toggle", () => cb()),
   onCtlDevtools: (cb) => ipcRenderer.on("ctl:devtools", () => cb()),
