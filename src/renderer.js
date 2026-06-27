@@ -13,6 +13,7 @@ const TERM_EL = { edit: "term-edit", shell: "term-shell", ai: "term-ai", shell2:
 const CELL_OF = { 1: "edit", 2: "shell", 3: "tr", 4: "ai" };
 
 const cells = {}; // id -> { t, fit, inputDisp, opened }
+const lastSel = {}; // pro Zelle: Auswahl im Moment des Rechtsklicks (bevor xterm sie loescht)
 let brOn = true;
 
 const LS = {
@@ -43,15 +44,18 @@ function ensureCell(id) {
     return true;
   });
 
-  document.getElementById(TERM_EL[id]).addEventListener("mousedown", (e) => {
+  const el = document.getElementById(TERM_EL[id]);
+  el.addEventListener("mousedown", (e) => {
     if (e.button === 1) { // Mittelklick = einfuegen
       e.preventDefault();
       window.devbox.clipboardRead().then((txt) => { if (txt) window.devbox.input(id, txt); });
     }
   });
-  document.getElementById(TERM_EL[id]).addEventListener("contextmenu", (e) => {
+  // Auswahl beim Rechtsklick sichern, BEVOR xterm sie loescht (capture-Phase laeuft vor xterm)
+  el.addEventListener("mousedown", (e) => { if (e.button === 2) lastSel[id] = t.getSelection(); }, true);
+  el.addEventListener("contextmenu", (e) => {
     e.preventDefault(); // Rechtsklick -> eigenes Kopieren/Einfuegen-Menue
-    window.devbox.termMenu(id, !!t.getSelection());
+    window.devbox.termMenu(id, !!lastSel[id]);
   });
 
   const c = { t, fit, inputDisp: null, opened: false };
@@ -123,7 +127,7 @@ const statusEl = document.getElementById("status");
 window.devbox.onAppStatus((s) => { statusEl.textContent = s || ""; });
 window.devbox.onData((p) => { const c = cells[p.id]; if (c) c.t.write(p.data); });
 
-window.devbox.onTermCopy((id) => { const c = cells[id]; if (c) { const s = c.t.getSelection(); if (s) window.devbox.clipboardWrite(s); } });
+window.devbox.onTermCopy((id) => { const s = lastSel[id]; if (s) window.devbox.clipboardWrite(s); });
 window.devbox.onTermPaste((id) => { window.devbox.clipboardRead().then((txt) => { if (txt) window.devbox.input(id, txt); }); });
 window.devbox.onTermSelectAll((id) => { const c = cells[id]; if (c) c.t.selectAll(); });
 
