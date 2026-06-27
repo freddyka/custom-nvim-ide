@@ -23,8 +23,9 @@ const LS = {
 
 function ensureCell(id) {
   if (cells[id]) return cells[id];
+  const fs0 = Number(LS.get("db_font_" + id)) || 13;
   const t = new Terminal({
-    fontFamily: FONT, fontSize: 13, cursorBlink: true, allowProposedApi: true, scrollback: 5000, theme: THEME,
+    fontFamily: FONT, fontSize: fs0, cursorBlink: true, allowProposedApi: true, scrollback: 5000, theme: THEME,
   });
   const fit = new FitAddon.FitAddon();
   t.loadAddon(fit);
@@ -41,6 +42,12 @@ function ensureCell(id) {
       window.devbox.clipboardRead().then((txt) => { if (txt) window.devbox.input(id, txt); });
       return false;
     }
+    // Schriftgroesse: Strg++ groesser, Strg+- kleiner, Strg+0 zuruecksetzen
+    if (e.ctrlKey && !e.altKey && !e.metaKey) {
+      if (e.key === "+" || e.key === "=") { e.preventDefault(); setFont(id, (t.options.fontSize || 13) + 1); return false; }
+      if (e.key === "-") { e.preventDefault(); setFont(id, (t.options.fontSize || 13) - 1); return false; }
+      if (e.key === "0") { e.preventDefault(); setFont(id, 13); return false; }
+    }
     return true;
   });
 
@@ -51,12 +58,20 @@ function ensureCell(id) {
       window.devbox.clipboardRead().then((txt) => { if (txt) window.devbox.input(id, txt); });
     }
   });
-  // Auswahl beim Rechtsklick sichern, BEVOR xterm sie loescht (capture-Phase laeuft vor xterm)
-  el.addEventListener("mousedown", (e) => { if (e.button === 2) lastSel[id] = t.getSelection(); }, true);
+  // Rechtsklick: Auswahl sichern UND xterm-Handler stoppen, damit die Markierung sichtbar bleibt
+  el.addEventListener("mousedown", (e) => {
+    if (e.button === 2) { lastSel[id] = t.getSelection(); e.stopPropagation(); }
+  }, true);
   el.addEventListener("contextmenu", (e) => {
     e.preventDefault(); // Rechtsklick -> eigenes Kopieren/Einfuegen-Menue
     window.devbox.termMenu(id, !!lastSel[id]);
   });
+  // Strg+Mausrad: Schrift in dieser Zelle zoomen
+  el.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    setFont(id, (t.options.fontSize || 13) + (e.deltaY < 0 ? 1 : -1));
+  }, { passive: false });
 
   const c = { t, fit, inputDisp: null, opened: false };
   c.inputDisp = t.onData((d) => window.devbox.input(id, d));
@@ -73,6 +88,16 @@ function fitCell(id) {
     c._rows = c.t.rows;
     window.devbox.resize(id, c.t.cols, c.t.rows);
   }
+}
+
+function setFont(id, px) {
+  const c = cells[id];
+  if (!c) return;
+  px = Math.max(7, Math.min(28, Math.round(px)));
+  if (c.t.options.fontSize === px) return;
+  c.t.options.fontSize = px;
+  LS.set("db_font_" + id, px);
+  fitCell(id);
 }
 
 function openCell(id) {

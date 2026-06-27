@@ -141,6 +141,7 @@ function stopAutosave() {
 }
 
 function createWindow() {
+  Menu.setApplicationMenu(null); // Standard-Menue weg: Strg++/-/0 (Zoom), Strg+R, Strg+W nicht abfangen
   win = new BrowserWindow({
     width: 1280,
     height: 820,
