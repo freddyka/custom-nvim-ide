@@ -28,6 +28,7 @@ let win = null;
 let conn = null;
 let connecting = false;
 let ready = false;
+let intentionalClose = false; // true = wir trennen absichtlich (kein Auto-Reconnect)
 const channels = {}; // id -> ssh2 stream
 let forwardServers = [];
 
@@ -122,6 +123,7 @@ function teardown() {
   Object.keys(channels).forEach((id) => { try { channels[id].close(); } catch (_) {} delete channels[id]; });
   forwardServers.forEach((s) => { try { s.close(); } catch (_) {} });
   forwardServers = [];
+  intentionalClose = true; // absichtliche Trennung -> kein Auto-Reconnect
   if (conn) { try { conn.end(); } catch (_) {} }
   conn = null;
   ready = false;
@@ -197,7 +199,9 @@ function connectSSH() {
   if (conn || connecting) return;
   const profile = activeProfile();
   connecting = true;
+  intentionalClose = false; // neuer Verbindungsversuch -> kuenftige Abbrueche sind unerwartet
   conn = new Client();
+  const thisConn = conn; // gegen Races: spaetes close einer alten Verbindung ignorieren
 
   conn.on("ready", () => {
     ready = true;
@@ -232,9 +236,18 @@ function connectSSH() {
   });
 
   conn.on("close", () => {
+    if (conn && conn !== thisConn) return; // ein neuer Connect hat schon uebernommen
     ready = false;
+    connecting = false;
     conn = null;
-    send("app:status", "getrennt");
+    Object.keys(channels).forEach((id) => { delete channels[id]; }); // Streams sind tot
+    forwardServers.forEach((s) => { try { s.close(); } catch (_) {} });
+    forwardServers = [];
+    if (intentionalClose) { intentionalClose = false; send("app:status", "getrennt"); return; }
+    // Unerwarteter Abbruch (Laptop schlief, Netz weg): Zellen zuruecksetzen und neu verbinden
+    send("app:reset");
+    send("app:status", "Verbindung verloren - neu verbinden ...");
+    setTimeout(connectSSH, 2000);
   });
 
   let privateKey;
@@ -280,7 +293,15 @@ function openChannel(id, cols, rows) {
   });
 }
 
-app.whenReady().then(() => {
+// Nur eine Instanz erlauben: ein zweiter Start fokussiert das vorhandene Fenster,
+// statt eine zweite App zu oeffnen (die sich an den Port-Forwards verschlucken wuerde).
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+  });
+  app.whenReady().then(() => {
   if (process.platform === "win32") app.setAppUserModelId("com.freddyka.devbox");
 
   // Rechtsklick-Kontextmenue + DevTools fuer die Browser-Zelle (webview)
@@ -472,10 +493,12 @@ app.whenReady().then(() => {
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-});
+  });
+} // Ende Single-Instance-Lock
 
 app.on("window-all-closed", () => {
   // Beim Schliessen nochmal sichern, damit der letzte Stand erhalten bleibt.
+  intentionalClose = true; // App wird beendet -> kein Auto-Reconnect
   stopAutosave();
   saveSession(function () {
     Object.values(channels).forEach((s) => {

@@ -98,12 +98,13 @@ function ensureCell(id) {
     e.preventDefault(); // Rechtsklick -> eigenes Kopieren/Einfuegen-Menue
     window.devbox.termMenu(id, !!lastSel[id]);
   });
-  // Strg+Mausrad: Schrift in dieser Zelle zoomen
+  // Strg+Mausrad: Schrift in dieser Zelle zoomen (capture, damit xterm nicht zusaetzlich scrollt)
   el.addEventListener("wheel", (e) => {
-    if (!e.ctrlKey) return;
+    if (!e.ctrlKey) return; // ohne Strg: normales Scrollen an xterm
     e.preventDefault();
+    e.stopPropagation();
     setFont(id, (t.options.fontSize || 13) + (e.deltaY < 0 ? 1 : -1));
-  }, { passive: false });
+  }, { passive: false, capture: true });
 
   const c = { t, fit, inputDisp: null, opened: false };
   c.inputDisp = t.onData((d) => window.devbox.input(id, d));
@@ -193,10 +194,12 @@ window.devbox.onChannelStatus((p) => {
   if (p.status === "closed" && c) {
     c.opened = false;
     if (c.inputDisp) c.inputDisp.dispose();
+    if (c._restart) { try { c._restart.dispose(); } catch (_) {} }
     c.t.write("\r\n\x1b[90m[Sitzung beendet — Enter zum Neustart]\x1b[0m\r\n");
-    const one = c.t.onData((d) => {
+    c._restart = c.t.onData((d) => {
       if (d === "\r" || d === "\n") {
-        one.dispose();
+        try { c._restart.dispose(); } catch (_) {}
+        c._restart = null;
         c.t.reset();
         c.inputDisp = c.t.onData((x) => window.devbox.input(p.id, x));
         openCell(p.id);
@@ -475,7 +478,11 @@ window.devbox.onSessionChanged(() => {
 window.devbox.onCtlSess(() => showSess());
 refreshSessName();
 window.devbox.onReset(() => {
-  Object.values(cells).forEach((c) => { c.opened = false; try { c.t.reset(); } catch (_) {} });
+  Object.values(cells).forEach((c) => {
+    c.opened = false;
+    if (c._restart) { try { c._restart.dispose(); } catch (_) {} c._restart = null; }
+    try { c.t.reset(); } catch (_) {}
+  });
 });
 
 // --- Start ---
