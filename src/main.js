@@ -265,7 +265,8 @@ function connectSSH() {
     port: Number(profile.port) || 22,
     username: profile.username,
     privateKey,
-    keepaliveInterval: 30000,
+    keepaliveInterval: 10000,
+    keepaliveCountMax: 3, // toten Link nach ~30s erkennen (statt ~90s)
   });
 }
 
