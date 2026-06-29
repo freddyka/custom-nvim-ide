@@ -5,6 +5,17 @@ const fs = require("fs");
 const net = require("net");
 const { Client } = require("ssh2");
 
+// Datei-Log fuer Diagnose (die Packed-App hat keine Konsole): %TEMP%/devbox-main.log
+const LOG_FILE = path.join(os.tmpdir(), "devbox-main.log");
+(function () {
+  const orig = console.log.bind(console);
+  console.log = function () {
+    const msg = "[" + new Date().toISOString() + "] " + Array.prototype.join.call(arguments, " ");
+    try { fs.appendFileSync(LOG_FILE, msg + "\n"); } catch (_) {}
+    orig.apply(console, arguments);
+  };
+})();
+
 // userData bleibt %APPDATA%/devbox-app bzw. ~/.config/devbox-app, egal wie das Build-Produkt heisst.
 app.setName("devbox-app");
 
@@ -225,30 +236,59 @@ function loseConnection(client) {
   Object.keys(channels).forEach((id) => { delete channels[id]; }); // Streams sind tot
   forwardServers.forEach((s) => { try { s.close(); } catch (_) {} });
   forwardServers = [];
+  console.log("[lose] Verbindung verloren (intentional=" + intentionalClose + ")");
   if (intentionalClose) { intentionalClose = false; send("app:status", "getrennt"); return; }
-  if (reconnectTimer) return; // Reconnect bereits geplant
   send("app:reset");
   send("app:status", "Verbindung verloren - neu verbinden ...");
-  reconnectTimer = setTimeout(() => { reconnectTimer = null; connectSSH(); }, 2000);
+  // Reconnect macht der Watchdog (alle 5s) -> kein eigener Timer
 }
 
 // Watchdog: faengt JEDEN haengenden/verlorenen Zustand ab, egal wie er entstand.
 // Laeuft ab dem ersten Verbindungswunsch und stellt sicher, dass immer wieder verbunden wird.
-function watchdogTick() {
-  if (intentionalClose) return;                 // absichtlich getrennt
-  if (ready && conn) return;                     // alles gut, verbunden
-  if (reconnectTimer) return;                    // Reconnect bereits geplant
-  if (connecting && Date.now() - connectStartedAt < 20000) return; // Versuch laeuft noch (max 20s)
-  console.log("[watchdog] Verbindung nicht aktiv -> erzwinge Reconnect");
-  if (conn) { try { conn.end(); } catch (_) {} } // evtl. haengenden Client wegraeumen
+function forceReconnect(why) {
+  console.log("[watchdog] " + why + " -> reconnect");
+  try { if (conn) conn.end(); } catch (_) {}
+  try { if (conn && conn.destroy) conn.destroy(); } catch (_) {}
   conn = null;
   connecting = false;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   send("app:reset");
   connectSSH();
 }
+let hcInFlight = false;
+let lastHealthOk = 0;
+function watchdogTick() {
+  if (intentionalClose) return;
+  if (connecting) {
+    if (Date.now() - connectStartedAt > 25000) forceReconnect("Verbindungsversuch haengt >25s");
+    return;
+  }
+  if (!conn || !ready) { forceReconnect("nicht verbunden"); return; }
+  // Verbunden: aktiv pruefen, ob die Leitung WIRKLICH lebt (ssh2 meldet einen toten
+  // Link nicht zuverlaessig). Hoechstens alle 30s, einfaches Kommando mit 12s-Timeout.
+  if (hcInFlight || Date.now() - lastHealthOk < 30000) return;
+  hcInFlight = true;
+  const myConn = conn;
+  let done = false;
+  const to = setTimeout(function () {
+    if (done) return; done = true; hcInFlight = false;
+    if (conn === myConn) forceReconnect("Health-Check Timeout");
+  }, 12000);
+  try {
+    conn.exec("printf ok", function (err, stream) {
+      if (done) return;
+      if (err || !stream) { done = true; clearTimeout(to); hcInFlight = false; if (conn === myConn) forceReconnect("Health-Check Fehler"); return; }
+      stream.on("data", function () {});
+      if (stream.stderr) stream.stderr.on("data", function () {});
+      stream.on("close", function () { if (done) return; done = true; clearTimeout(to); hcInFlight = false; lastHealthOk = Date.now(); });
+    });
+  } catch (e) {
+    if (!done) { done = true; clearTimeout(to); hcInFlight = false; if (conn === myConn) forceReconnect("Health-Check Ausnahme"); }
+  }
+}
 function startWatchdog() {
   if (watchdog) return;
-  watchdog = setInterval(watchdogTick, 8000);
+  watchdog = setInterval(watchdogTick, 5000);
 }
 
 function connectSSH() {
@@ -256,6 +296,7 @@ function connectSSH() {
   const profile = activeProfile();
   connecting = true;
   connectStartedAt = Date.now();
+  console.log("[connect] Versuch zu " + profile.host + ":" + (profile.port || 22));
   intentionalClose = false; // neuer Verbindungsversuch -> kuenftige Abbrueche sind unerwartet
   conn = new Client();
   const thisConn = conn; // gegen Races: spaetes close einer alten Verbindung ignorieren
@@ -263,6 +304,7 @@ function connectSSH() {
   conn.on("ready", () => {
     ready = true;
     connecting = false;
+    lastHealthOk = Date.now(); // frisch verbunden gilt als gesund
     console.log("[ssh] verbunden mit " + profile.host);
     send("app:status", "verbunden: " + profile.name + " - lade Session ...");
     FORWARD_PORTS.forEach((p) => setupForward(p, p));
@@ -322,7 +364,7 @@ function connectSSH() {
     // ohne dass ssh2 die Verbindung selbst kappt. ~2 Min bis ein wirklich toter Link erkannt
     // wird; die schnelle Erholung uebernimmt ohnehin der Watchdog/Reconnect.
     keepaliveInterval: 20000,
-    keepaliveCountMax: 6,
+    keepaliveCountMax: 30, // ssh2 NIE wegen Keepalive selbst trennen; toten Link erkennt der Watchdog aktiv
     readyTimeout: 20000, // haengender Verbindungsversuch scheitert -> Reconnect statt Haenger
   });
 }
