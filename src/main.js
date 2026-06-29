@@ -47,7 +47,14 @@ function tmuxName(id) {
   return activeSession === "main" ? id : activeSession + "-" + id;
 }
 function startupCmd(id) {
-  return "clear; tmux new-session -A -s " + tmuxName(id) + " " + (CELL_PROG[id] || "") + "\n";
+  const name = tmuxName(id);
+  const prog = CELL_PROG[id] || "";
+  // Programm-Zellen fallen nach dem Beenden auf eine Shell zurueck, damit die tmux-Session
+  // nie stirbt. edit bekommt DEVBOX_EDIT=1 -> nvim stellt die zuletzt offenen Dateien wieder her.
+  let body = "";
+  if (prog === "nvim") body = " 'export DEVBOX_EDIT=1; nvim; exec ${SHELL:-bash}'";
+  else if (prog) body = " '" + prog + "; exec ${SHELL:-bash}'";
+  return "clear; tmux new-session -A -s " + name + body + "\n";
 }
 function sanitizeSessionName(name) {
   return String(name || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);

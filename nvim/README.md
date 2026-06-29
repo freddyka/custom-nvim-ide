@@ -16,6 +16,7 @@ Drop both files into your AstroNvim plugins folder:
 |---|---|
 | `beginner-keymaps.lua` | the keybindings (save, run, copy/paste, comment, buffers, …) |
 | `blink-arrows.lua` | completion behaviour: arrows navigate code, **Tab** engages the popup |
+| `devbox-session.lua` | in the devbox app's editor cell, auto-restores the last open files on launch and saves them on exit (scoped via the `DEVBOX_EDIT=1` env var the app sets, so your other Neovim instances are untouched) |
 
 Restart Neovim — that's it. (AstroNvim auto-loads anything in `lua/plugins/`.)
 
