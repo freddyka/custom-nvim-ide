@@ -29,6 +29,8 @@ let conn = null;
 let connecting = false;
 let ready = false;
 let intentionalClose = false; // true = wir trennen absichtlich (kein Auto-Reconnect)
+let reconnectTimer = null;    // laufender Auto-Reconnect-Timer (idempotent)
+let lostClient = null;        // Verbindung, deren Verlust bereits behandelt wurde (error+close)
 const channels = {}; // id -> ssh2 stream
 let forwardServers = [];
 
@@ -124,6 +126,7 @@ function teardown() {
   forwardServers.forEach((s) => { try { s.close(); } catch (_) {} });
   forwardServers = [];
   intentionalClose = true; // absichtliche Trennung -> kein Auto-Reconnect
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; } // geplanten Reconnect abbrechen
   if (conn) { try { conn.end(); } catch (_) {} }
   conn = null;
   ready = false;
@@ -195,6 +198,25 @@ function expandKeyPath(p) {
   return p;
 }
 
+// Verbindung verloren: Zustand sauber zuruecksetzen und (sofern nicht absichtlich) neu verbinden.
+// Wird von error UND close aufgerufen; pro Client nur einmal wirksam, Reconnect ist idempotent.
+function loseConnection(client) {
+  if (conn && conn !== client) return; // ein neuerer Connect hat bereits uebernommen
+  if (lostClient === client) return;   // schon behandelt (error + close fuer denselben Client)
+  lostClient = client;
+  ready = false;
+  connecting = false;
+  conn = null;
+  Object.keys(channels).forEach((id) => { delete channels[id]; }); // Streams sind tot
+  forwardServers.forEach((s) => { try { s.close(); } catch (_) {} });
+  forwardServers = [];
+  if (intentionalClose) { intentionalClose = false; send("app:status", "getrennt"); return; }
+  if (reconnectTimer) return; // Reconnect bereits geplant
+  send("app:reset");
+  send("app:status", "Verbindung verloren - neu verbinden ...");
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connectSSH(); }, 2000);
+}
+
 function connectSSH() {
   if (conn || connecting) return;
   const profile = activeProfile();
@@ -230,24 +252,13 @@ function connectSSH() {
   });
 
   conn.on("error", (e) => {
-    connecting = false;
     console.log("[ssh] Fehler: " + e.message);
     send("app:status", "SSH-Fehler: " + e.message);
+    loseConnection(thisConn); // auch bei error neu planen (sonst Haenger ohne close)
   });
 
   conn.on("close", () => {
-    if (conn && conn !== thisConn) return; // ein neuer Connect hat schon uebernommen
-    ready = false;
-    connecting = false;
-    conn = null;
-    Object.keys(channels).forEach((id) => { delete channels[id]; }); // Streams sind tot
-    forwardServers.forEach((s) => { try { s.close(); } catch (_) {} });
-    forwardServers = [];
-    if (intentionalClose) { intentionalClose = false; send("app:status", "getrennt"); return; }
-    // Unerwarteter Abbruch (Laptop schlief, Netz weg): Zellen zuruecksetzen und neu verbinden
-    send("app:reset");
-    send("app:status", "Verbindung verloren - neu verbinden ...");
-    setTimeout(connectSSH, 2000);
+    loseConnection(thisConn);
   });
 
   let privateKey;
@@ -267,6 +278,7 @@ function connectSSH() {
     privateKey,
     keepaliveInterval: 10000,
     keepaliveCountMax: 3, // toten Link nach ~30s erkennen (statt ~90s)
+    readyTimeout: 15000,  // haengender Verbindungsversuch scheitert nach 15s -> Reconnect statt Haenger
   });
 }
 
