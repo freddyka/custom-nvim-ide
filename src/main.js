@@ -86,28 +86,40 @@ function send(channel, payload) {
 
 function loadConnections() {
   connFile = path.join(app.getPath("userData"), "connections.json");
-  try {
-    const data = JSON.parse(fs.readFileSync(connFile, "utf8"));
-    connections = data.connections || [];
-    activeId = data.activeId || null;
-  } catch (_) {
-    connections = [];
-  }
-  if (!connections.length) {
-    connections = [{
-      id: "default", name: "devbox",
-      host: CONN.host, port: CONN.port, username: CONN.username, keyPath: CONN.keyPath,
-    }];
+  let data = null, readErr = null;
+  try { data = JSON.parse(fs.readFileSync(connFile, "utf8")); }
+  catch (e) { readErr = e; }
+
+  if (data && Array.isArray(data.connections) && data.connections.length) {
+    connections = data.connections;
+    activeId = data.activeId || connections[0].id;
+  } else if (readErr && fs.existsSync(connFile)) {
+    // Datei existiert, war aber gerade nicht lesbar (z.B. mitten im Schreiben). NICHT mit dem
+    // 127.0.0.1-Platzhalter ueberschreiben -> sonst geht die echte Verbindung verloren.
+    console.log("[conn] loadConnections Lesefehler (Datei vorhanden) -> behalte bisherige Profile: " + readErr.message);
+    if (!connections.length) return; // beim naechsten Versuch erneut probieren
+  } else if (!connections.length) {
+    // Wirklich keine/leere Datei -> Default seeden (erster Start)
+    connections = [{ id: "default", name: "devbox", host: CONN.host, port: CONN.port, username: CONN.username, keyPath: CONN.keyPath }];
     activeId = "default";
     saveConnections();
   }
-  if (!activeId || !connections.find((c) => c.id === activeId)) activeId = connections[0].id;
+  if (!activeId || !connections.find((c) => c.id === activeId)) activeId = connections.length ? connections[0].id : null;
+  console.log("[conn] loadConnections: " + connections.length + " Profil(e), aktiv=" + activeId + ", host=" + (connections[0] && connections[0].host));
 }
 function saveConnections() {
   try { fs.writeFileSync(connFile, JSON.stringify({ connections, activeId }, null, 2)); } catch (_) {}
 }
 function activeProfile() {
-  return connections.find((c) => c.id === activeId) || connections[0] || CONN;
+  let p = connections.find((c) => c.id === activeId) || connections[0] || CONN;
+  // 127.0.0.1 ist nur der Repo-Platzhalter, NIE ein echtes Ziel. Leer oder Platzhalter ->
+  // echte Verbindung von Platte nachladen, damit die Laufzeit sich wie ein Frischstart verhaelt.
+  if (!connections.length || !p || p.host === CONN.host) {
+    console.log("[conn] kein gueltiges Profil (host=" + (p && p.host) + ") -> reload von Platte");
+    loadConnections();
+    p = connections.find((c) => c.id === activeId) || connections[0] || CONN;
+  }
+  return p;
 }
 
 function loadSessions() {
@@ -490,7 +502,7 @@ if (!app.requestSingleInstanceLock()) {
   });
   }
 
-  ipcMain.on("app:connect", () => { startWatchdog(); connectSSH(); });
+  ipcMain.on("app:connect", () => { console.log("[ipc] app:connect (Renderer geladen)"); startWatchdog(); connectSSH(); });
 
   // SSH-Verbindungsverwaltung
   ipcMain.handle("conn:list", () => ({ connections, activeId }));
@@ -508,6 +520,7 @@ if (!app.requestSingleInstanceLock()) {
     send("conn:changed");
   });
   ipcMain.on("conn:delete", (e, id) => {
+    console.log("[conn] conn:delete id=" + id);
     connections = connections.filter((c) => c.id !== id);
     if (activeId === id) activeId = connections[0] ? connections[0].id : null;
     saveConnections();
