@@ -33,6 +33,10 @@ let reconnectTimer = null;    // laufender Auto-Reconnect-Timer (idempotent)
 let lostClient = null;        // Verbindung, deren Verlust bereits behandelt wurde (error+close)
 let connectStartedAt = 0;     // Zeitpunkt des letzten Verbindungsversuchs (fuer Watchdog)
 let watchdog = null;          // Reconnect-Watchdog-Timer
+
+// Ein verirrter Fehler darf NICHT den Main-Prozess (und damit Reconnect-Timer) lahmlegen.
+process.on("uncaughtException", (e) => console.log("[uncaught] " + ((e && e.stack) || e)));
+process.on("unhandledRejection", (e) => console.log("[unhandledRejection] " + ((e && e.stack) || e)));
 const channels = {}; // id -> ssh2 stream
 let forwardServers = [];
 
@@ -314,9 +318,12 @@ function connectSSH() {
     port: Number(profile.port) || 22,
     username: profile.username,
     privateKey,
-    keepaliveInterval: 10000,
-    keepaliveCountMax: 3, // toten Link nach ~30s erkennen (statt ~90s)
-    readyTimeout: 15000,  // haengender Verbindungsversuch scheitert nach 15s -> Reconnect statt Haenger
+    // Tolerant: ein langsamer/ausgelasteter Laptop darf ein paar Keepalives verschlucken,
+    // ohne dass ssh2 die Verbindung selbst kappt. ~2 Min bis ein wirklich toter Link erkannt
+    // wird; die schnelle Erholung uebernimmt ohnehin der Watchdog/Reconnect.
+    keepaliveInterval: 20000,
+    keepaliveCountMax: 6,
+    readyTimeout: 20000, // haengender Verbindungsversuch scheitert -> Reconnect statt Haenger
   });
 }
 
@@ -350,7 +357,13 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    } else {
+      createWindow(); // Fenster war zu (z.B. waehrend des Schliessens) -> neu oeffnen statt Absturz
+    }
   });
   app.whenReady().then(() => {
   if (process.platform === "win32") app.setAppUserModelId("com.freddyka.devbox");
