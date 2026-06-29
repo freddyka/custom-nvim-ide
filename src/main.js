@@ -31,6 +31,8 @@ let ready = false;
 let intentionalClose = false; // true = wir trennen absichtlich (kein Auto-Reconnect)
 let reconnectTimer = null;    // laufender Auto-Reconnect-Timer (idempotent)
 let lostClient = null;        // Verbindung, deren Verlust bereits behandelt wurde (error+close)
+let connectStartedAt = 0;     // Zeitpunkt des letzten Verbindungsversuchs (fuer Watchdog)
+let watchdog = null;          // Reconnect-Watchdog-Timer
 const channels = {}; // id -> ssh2 stream
 let forwardServers = [];
 
@@ -186,7 +188,16 @@ function setupForward(localPort, remotePort) {
       up.on("error", () => sock.destroy());
     });
   });
-  server.on("error", (e) => console.log("[fwd] " + localPort + " Fehler: " + e.message));
+  let retries = 0;
+  server.on("error", (e) => {
+    // Port noch von einer alten Instanz belegt? Kurz warten und erneut binden.
+    if (e.code === "EADDRINUSE" && retries < 15) {
+      retries++;
+      setTimeout(() => { if (!server.listening) { try { server.listen(localPort, "127.0.0.1"); } catch (_) {} } }, 1000);
+      return;
+    }
+    console.log("[fwd] " + localPort + " Fehler: " + e.message);
+  });
   server.listen(localPort, "127.0.0.1", () =>
     console.log("[fwd] localhost:" + localPort + " -> " + remotePort)
   );
@@ -217,10 +228,30 @@ function loseConnection(client) {
   reconnectTimer = setTimeout(() => { reconnectTimer = null; connectSSH(); }, 2000);
 }
 
+// Watchdog: faengt JEDEN haengenden/verlorenen Zustand ab, egal wie er entstand.
+// Laeuft ab dem ersten Verbindungswunsch und stellt sicher, dass immer wieder verbunden wird.
+function watchdogTick() {
+  if (intentionalClose) return;                 // absichtlich getrennt
+  if (ready && conn) return;                     // alles gut, verbunden
+  if (reconnectTimer) return;                    // Reconnect bereits geplant
+  if (connecting && Date.now() - connectStartedAt < 20000) return; // Versuch laeuft noch (max 20s)
+  console.log("[watchdog] Verbindung nicht aktiv -> erzwinge Reconnect");
+  if (conn) { try { conn.end(); } catch (_) {} } // evtl. haengenden Client wegraeumen
+  conn = null;
+  connecting = false;
+  send("app:reset");
+  connectSSH();
+}
+function startWatchdog() {
+  if (watchdog) return;
+  watchdog = setInterval(watchdogTick, 8000);
+}
+
 function connectSSH() {
   if (conn || connecting) return;
   const profile = activeProfile();
   connecting = true;
+  connectStartedAt = Date.now();
   intentionalClose = false; // neuer Verbindungsversuch -> kuenftige Abbrueche sind unerwartet
   conn = new Client();
   const thisConn = conn; // gegen Races: spaetes close einer alten Verbindung ignorieren
@@ -237,18 +268,25 @@ function connectSSH() {
     var boot = "if ! tmux list-sessions 2>/dev/null | grep -q .; then " +
       "tmux new-session -d -s __boot 2>/dev/null; sleep 4; tmux kill-session -t __boot 2>/dev/null; " +
       "echo RESTORED; fi; echo BOOT_DONE";
+    var bootDone = false;
+    function finishBoot() {
+      if (bootDone) return; // nur einmal: Zellen oeffnen + Autosave starten
+      bootDone = true;
+      send("app:status", "verbunden: " + profile.name);
+      send("app:ready", true);
+      startAutosave();
+    }
     conn.exec(boot, function (err, stream) {
-      if (err || !stream) { send("app:ready", true); send("app:status", "verbunden: " + profile.name); return; }
+      if (err || !stream) { finishBoot(); return; }
       var out = "";
       stream.on("data", function (d) { out += d.toString(); });
       if (stream.stderr) stream.stderr.on("data", function () {});
       stream.on("close", function () {
         if (out.indexOf("RESTORED") >= 0) console.log("[boot] Session nach Reboot wiederhergestellt");
-        send("app:status", "verbunden: " + profile.name);
-        send("app:ready", true);
-        startAutosave();
+        finishBoot();
       });
     });
+    setTimeout(finishBoot, 8000); // Sicherheitsnetz: Boot-Exec darf die Zellen nicht ewig blockieren
   });
 
   conn.on("error", (e) => {
@@ -397,7 +435,7 @@ if (!app.requestSingleInstanceLock()) {
   });
   }
 
-  ipcMain.on("app:connect", () => connectSSH());
+  ipcMain.on("app:connect", () => { startWatchdog(); connectSSH(); });
 
   // SSH-Verbindungsverwaltung
   ipcMain.handle("conn:list", () => ({ connections, activeId }));
@@ -512,6 +550,10 @@ if (!app.requestSingleInstanceLock()) {
 app.on("window-all-closed", () => {
   // Beim Schliessen nochmal sichern, damit der letzte Stand erhalten bleibt.
   intentionalClose = true; // App wird beendet -> kein Auto-Reconnect
+  if (watchdog) { clearInterval(watchdog); watchdog = null; }
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  forwardServers.forEach((s) => { try { s.close(); } catch (_) {} }); // Ports sofort freigeben
+  forwardServers = [];
   stopAutosave();
   saveSession(function () {
     Object.values(channels).forEach((s) => {
