@@ -90,8 +90,8 @@ function send(channel, payload) {
 
 function loadConnections() {
   connFile = path.join(app.getPath("userData"), "connections.json");
-  let data = null, readErr = null;
-  try { data = JSON.parse(fs.readFileSync(connFile, "utf8")); }
+  let data = null, readErr = null, raw = "";
+  try { raw = fs.readFileSync(connFile, "utf8"); data = JSON.parse(raw); }
   catch (e) { readErr = e; }
 
   if (data && Array.isArray(data.connections) && data.connections.length) {
@@ -109,9 +109,16 @@ function loadConnections() {
     activeId = "default";
   }
   if (!activeId || !connections.find((c) => c.id === activeId)) activeId = connections.length ? connections[0].id : null;
-  console.log("[conn] loadConnections: file=" + connFile + " exists=" + fs.existsSync(connFile) + " -> " + connections.length + " Profil(e), aktiv=" + activeId + ", host=" + (connections[0] && connections[0].host));
+  console.log("[conn] loadConnections: file=" + connFile + " exists=" + fs.existsSync(connFile) + " readErr=" + (readErr && readErr.message) + " raw=" + JSON.stringify(raw.slice(0, 90)) + " -> host=" + (connections[0] && connections[0].host));
 }
 function saveConnections() {
+  console.log("[conn] saveConnections host=" + (connections[0] && connections[0].host) + " n=" + connections.length + " caller=" + ((new Error().stack || "").split("\n")[2] || "").trim());
+  // NIE nur den 127.0.0.1-Platzhalter speichern -> das wuerde die echte Config auf der Platte
+  // zerstoeren. Lieber gar nichts schreiben; die echte connections.json bleibt erhalten.
+  if (connections.length === 1 && connections[0] && connections[0].host === CONN.host) {
+    console.log("[conn] saveConnections UEBERSPRUNGEN: nur Platzhalter " + CONN.host);
+    return;
+  }
   // Atomar schreiben (Temp + rename), damit ein Kill mitten im Schreiben die Datei nicht zerstoert.
   try {
     const tmp = connFile + ".tmp";
@@ -516,6 +523,7 @@ if (!app.requestSingleInstanceLock()) {
   // SSH-Verbindungsverwaltung
   ipcMain.handle("conn:list", () => ({ connections, activeId }));
   ipcMain.on("conn:save", (e, profile) => {
+    console.log("[conn] conn:save empfangen host=" + (profile && profile.host) + " id=" + (profile && profile.id));
     if (!profile || !profile.host) return;
     if (profile.id) {
       const i = connections.findIndex((c) => c.id === profile.id);
