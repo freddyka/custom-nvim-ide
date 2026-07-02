@@ -18,6 +18,10 @@ const LOG_FILE = path.join(os.tmpdir(), "devbox-main.log");
 
 // userData bleibt %APPDATA%/devbox-app bzw. ~/.config/devbox-app, egal wie das Build-Produkt heisst.
 app.setName("devbox-app");
+// WICHTIG: In der gepackten .exe greift setName evtl. zu spaet -> userData landet unter
+// .../Electron oder .../<productName> (ohne unsere connections.json) und die App verbindet
+// dann zum 127.0.0.1-Platzhalter. Darum den userData-Pfad hier EXPLIZIT festnageln.
+try { app.setPath("userData", path.join(app.getPath("appData"), "devbox-app")); } catch (e) { console.log("[conn] setPath userData Fehler: " + e.message); }
 
 // Standard-Verbindung. Ueberschreibbar per Umgebungsvariablen (DEVBOX_HOST/PORT/USER/KEY)
 // oder im SSH-Manager der App. Die eigene Verbindung wird in connections.json gespeichert.
@@ -105,7 +109,7 @@ function loadConnections() {
     activeId = "default";
   }
   if (!activeId || !connections.find((c) => c.id === activeId)) activeId = connections.length ? connections[0].id : null;
-  console.log("[conn] loadConnections: " + connections.length + " Profil(e), aktiv=" + activeId + ", host=" + (connections[0] && connections[0].host));
+  console.log("[conn] loadConnections: file=" + connFile + " exists=" + fs.existsSync(connFile) + " -> " + connections.length + " Profil(e), aktiv=" + activeId + ", host=" + (connections[0] && connections[0].host));
 }
 function saveConnections() {
   // Atomar schreiben (Temp + rename), damit ein Kill mitten im Schreiben die Datei nicht zerstoert.
