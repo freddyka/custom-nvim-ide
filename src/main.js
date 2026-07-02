@@ -99,16 +99,21 @@ function loadConnections() {
     console.log("[conn] loadConnections Lesefehler (Datei vorhanden) -> behalte bisherige Profile: " + readErr.message);
     if (!connections.length) return; // beim naechsten Versuch erneut probieren
   } else if (!connections.length) {
-    // Wirklich keine/leere Datei -> Default seeden (erster Start)
+    // Keine/leere Datei -> Platzhalter NUR im Speicher, NICHT speichern. Sonst ueberschreibt der
+    // 127.0.0.1-Platzhalter eine echte Config dauerhaft. Der SSH-Manager speichert bei Bedarf selbst.
     connections = [{ id: "default", name: "devbox", host: CONN.host, port: CONN.port, username: CONN.username, keyPath: CONN.keyPath }];
     activeId = "default";
-    saveConnections();
   }
   if (!activeId || !connections.find((c) => c.id === activeId)) activeId = connections.length ? connections[0].id : null;
   console.log("[conn] loadConnections: " + connections.length + " Profil(e), aktiv=" + activeId + ", host=" + (connections[0] && connections[0].host));
 }
 function saveConnections() {
-  try { fs.writeFileSync(connFile, JSON.stringify({ connections, activeId }, null, 2)); } catch (_) {}
+  // Atomar schreiben (Temp + rename), damit ein Kill mitten im Schreiben die Datei nicht zerstoert.
+  try {
+    const tmp = connFile + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify({ connections, activeId }, null, 2));
+    fs.renameSync(tmp, connFile);
+  } catch (_) {}
 }
 function activeProfile() {
   let p = connections.find((c) => c.id === activeId) || connections[0] || CONN;
